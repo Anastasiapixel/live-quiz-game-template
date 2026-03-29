@@ -34,6 +34,7 @@ export interface Game {
   answersByQuestion: Map<number, AnswerRecord[]>;
   questionStartedAt?: number;
   questionTimer?: NodeJS.Timeout;
+  postQuestionTimer?: NodeJS.Timeout;
 }
 
 export interface Session {
@@ -133,4 +134,14 @@ export interface QuestionResultMessage {
   questionIndex: number;
   correctIndex: number;
   playerResults: PlayerQuestionResult[];
+}
+
+export interface ScoreboardEntry {
+  name: string;
+  score: number;
+  rank: number;
+}
+
+export interface GameFinishedMessage {
+  scoreboard: ScoreboardEntry[];
 }

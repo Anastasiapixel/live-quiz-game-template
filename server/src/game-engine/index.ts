@@ -1,9 +1,11 @@
 import type {
   Game,
+  GameFinishedMessage,
   PlayerQuestionResult,
   Question,
   QuestionMessage,
   QuestionResultMessage,
+  ScoreboardEntry,
 } from '../types.js';
 
 const BASE_POINTS = 1000;
@@ -140,5 +142,34 @@ export function resolveCurrentQuestion(game: Game): QuestionResultMessage | null
     questionIndex,
     correctIndex: question.correctIndex,
     playerResults,
+  };
+}
+
+export function hasNextQuestion(game: Game): boolean {
+  return game.currentQuestion + 1 < game.questions.length;
+}
+
+export function advanceToNextQuestion(game: Game): Question | null {
+  if (!hasNextQuestion(game)) {
+    return null;
+  }
+
+  game.currentQuestion += 1;
+  return getCurrentQuestion(game);
+}
+
+export function buildScoreboard(game: Game): ScoreboardEntry[] {
+  return [...game.players]
+    .sort((left, right) => right.score - left.score)
+    .map((player, index) => ({
+      name: player.name,
+      score: player.score,
+      rank: index + 1,
+    }));
+}
+
+export function toGameFinishedMessage(game: Game): GameFinishedMessage {
+  return {
+    scoreboard: buildScoreboard(game),
   };
 }

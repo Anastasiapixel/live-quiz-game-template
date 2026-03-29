@@ -1,12 +1,15 @@
 import type { WebSocket } from 'ws';
 import { sendMessage } from '../protocol/index.js';
 import {
+  advanceToNextQuestion,
   beginGame,
   createGame,
   getCurrentQuestion,
+  hasNextQuestion,
   isAnswerWindowOpen,
   resolveCurrentQuestion,
   scheduleQuestionTimer,
+  toGameFinishedMessage,
   toQuestionMessage,
 } from '../game-engine/index.js';
 import type { InMemoryStore } from '../store/index.js';
@@ -15,6 +18,7 @@ import type {
   AnswerData,
   CreateGameData,
   ErrorResponse,
+  GameFinishedMessage,
   GameCreatedResponse,
   GameJoinedResponse,
   IncomingMessage,
@@ -40,6 +44,7 @@ export interface HandlerPayload {
 }
 
 export type CommandHandler = (payload: HandlerPayload) => void;
+const RESULT_DISPLAY_MS = 3000;
 
 function isRegData(value: unknown): value is RegData {
   if (!value || typeof value !== 'object') {
@@ -87,6 +92,10 @@ function sendAnswerAccepted(socket: WebSocket, data: AnswerAcceptedMessage): voi
   sendMessage(socket, 'answer_accepted', data, 0);
 }
 
+function sendGameFinished(socket: WebSocket, data: GameFinishedMessage): void {
+  sendMessage(socket, 'game_finished', data, 0);
+}
+
 function getSocketsForGame(store: InMemoryStore, gameId: string, hostId: string, players: Player[]): WebSocket[] {
   const sockets = new Set<WebSocket>();
   const hostSession = store.getSessionByUserId(hostId);
@@ -124,6 +133,91 @@ function broadcastQuestionResult(
   }
 }
 
+function broadcastGameFinished(
+  store: InMemoryStore,
+  gameId: string,
+  hostId: string,
+  players: Player[],
+  payload: GameFinishedMessage,
+): void {
+  const sockets = getSocketsForGame(store, gameId, hostId, players);
+  for (const targetSocket of sockets) {
+    sendGameFinished(targetSocket, payload);
+  }
+}
+
+function completeGame(store: InMemoryStore, gameId: string): void {
+  const game = store.getGameById(gameId);
+  if (!game) {
+    return;
+  }
+
+  if (game.questionTimer) {
+    clearTimeout(game.questionTimer);
+  }
+
+  if (game.postQuestionTimer) {
+    clearTimeout(game.postQuestionTimer);
+  }
+
+  game.questionTimer = undefined;
+  game.postQuestionTimer = undefined;
+  game.questionStartedAt = undefined;
+  game.status = 'finished';
+
+  const payload = toGameFinishedMessage(game);
+  store.saveGame(game);
+  broadcastGameFinished(store, game.id, game.hostId, game.players, payload);
+}
+
+function schedulePostQuestionStep(store: InMemoryStore, gameId: string): void {
+  const game = store.getGameById(gameId);
+  if (!game || game.status !== 'in_progress') {
+    return;
+  }
+
+  if (game.postQuestionTimer) {
+    clearTimeout(game.postQuestionTimer);
+  }
+
+  game.postQuestionTimer = setTimeout(() => {
+    const nextGame = store.getGameById(gameId);
+    if (!nextGame || nextGame.status !== 'in_progress') {
+      return;
+    }
+
+    nextGame.postQuestionTimer = undefined;
+
+    if (!hasNextQuestion(nextGame)) {
+      completeGame(store, gameId);
+      return;
+    }
+
+    const nextQuestion = advanceToNextQuestion(nextGame);
+    if (!nextQuestion) {
+      completeGame(store, gameId);
+      return;
+    }
+
+    nextGame.answersByQuestion.set(nextGame.currentQuestion, []);
+    scheduleQuestionTimer(nextGame, () => {
+      finalizeCurrentQuestion(store, nextGame.id);
+    });
+
+    store.saveGame(nextGame);
+
+    const nextPayload = toQuestionMessage(nextGame);
+    if (!nextPayload) {
+      completeGame(store, gameId);
+      return;
+    }
+
+    broadcastQuestion(store, nextGame.id, nextGame.hostId, nextGame.players, nextPayload);
+  }, RESULT_DISPLAY_MS);
+
+  store.saveGame(game);
+}
+
 function finalizeCurrentQuestion(store: InMemoryStore, gameId: string): void {
   const game = store.getGameById(gameId);
   if (!game || game.status !== 'in_progress') {
@@ -148,6 +242,7 @@ function finalizeCurrentQuestion(store: InMemoryStore, gameId: string): void {
 
   store.saveGame(game);
   broadcastQuestionResult(store, game.id, game.hostId, game.players, resultPayload);
+  schedulePostQuestionStep(store, game.id);
 }
 
 function handleReg(store: InMemoryStore, payload: HandlerPayload): void {

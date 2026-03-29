@@ -1,3 +1,4 @@
+import type { WebSocket } from 'ws';
 import type { Game, Session, User } from '../types.js';
 import { createUniqueGameId, createUniqueRoomCode, createUniqueUserId } from './generators.js';
 
@@ -7,6 +8,7 @@ export interface InMemoryStore {
   gamesById: Map<string, Game>;
   gameIdsByCode: Map<string, string>;
   sessionsByUserId: Map<string, Session>;
+  sessionsBySocket: Map<WebSocket, string>;
   generateUserId(): string;
   generateGameId(): string;
   generateRoomCode(): string;
@@ -14,8 +16,10 @@ export interface InMemoryStore {
   getUserByName(name: string): User | undefined;
   saveUser(user: User): void;
   getSessionByUserId(userId: string): Session | undefined;
+  getSessionBySocket(socket: WebSocket): Session | undefined;
   saveSession(session: Session): void;
   removeSession(userId: string): void;
+  removeSessionBySocket(socket: WebSocket): void;
   getGameById(gameId: string): Game | undefined;
   getGameByCode(code: string): Game | undefined;
   saveGame(game: Game): void;
@@ -28,6 +32,7 @@ export function createStore(): InMemoryStore {
   const gamesById = new Map<string, Game>();
   const gameIdsByCode = new Map<string, string>();
   const sessionsByUserId = new Map<string, Session>();
+  const sessionsBySocket = new Map<WebSocket, string>();
 
   return {
     usersById,
@@ -35,6 +40,7 @@ export function createStore(): InMemoryStore {
     gamesById,
     gameIdsByCode,
     sessionsByUserId,
+    sessionsBySocket,
     generateUserId: () => createUniqueUserId((id) => usersById.has(id)),
     generateGameId: () => createUniqueGameId((id) => gamesById.has(id)),
     generateRoomCode: () => createUniqueRoomCode((code) => gameIdsByCode.has(code)),
@@ -48,10 +54,39 @@ export function createStore(): InMemoryStore {
       usersByName.set(user.name, user.index);
     },
     getSessionByUserId: (userId: string) => sessionsByUserId.get(userId),
+    getSessionBySocket: (socket: WebSocket) => {
+      const userId = sessionsBySocket.get(socket);
+      return userId ? sessionsByUserId.get(userId) : undefined;
+    },
     saveSession: (session: Session) => {
+      const previousSessionForUser = sessionsByUserId.get(session.userId);
+      if (previousSessionForUser) {
+        sessionsBySocket.delete(previousSessionForUser.socket);
+      }
+
+      const previousUserIdForSocket = sessionsBySocket.get(session.socket);
+      if (previousUserIdForSocket && previousUserIdForSocket !== session.userId) {
+        sessionsByUserId.delete(previousUserIdForSocket);
+      }
+
       sessionsByUserId.set(session.userId, session);
+      sessionsBySocket.set(session.socket, session.userId);
     },
     removeSession: (userId: string) => {
+      const session = sessionsByUserId.get(userId);
+      if (session) {
+        sessionsBySocket.delete(session.socket);
+      }
+
+      sessionsByUserId.delete(userId);
+    },
+    removeSessionBySocket: (socket: WebSocket) => {
+      const userId = sessionsBySocket.get(socket);
+      if (!userId) {
+        return;
+      }
+
+      sessionsBySocket.delete(socket);
       sessionsByUserId.delete(userId);
     },
     getGameById: (gameId: string) => gamesById.get(gameId),

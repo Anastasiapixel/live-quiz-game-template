@@ -58,3 +58,15 @@ export interface OutgoingMessage<TData = unknown> {
   data: TData;
   id: number;
 }
+
+export interface RegData {
+  name: string;
+  password: string;
+}
+
+export interface RegResponse {
+  name: string;
+  index: Identifier | '';
+  error: boolean;
+  errorText: string;
+}

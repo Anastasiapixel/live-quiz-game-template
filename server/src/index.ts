@@ -26,6 +26,10 @@ wss.on('connection', (socket: WebSocket) => {
 
     handler({ socket, message });
   });
+
+  socket.on('close', () => {
+    store.removeSessionBySocket(socket);
+  });
 });
 
 wss.on('listening', () => {

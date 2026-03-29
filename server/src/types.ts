@@ -83,3 +83,16 @@ export interface GameCreatedResponse {
 export interface ErrorResponse {
   message: string;
 }
+
+export interface JoinGameData {
+  code: string;
+}
+
+export interface GameJoinedResponse {
+  gameId: string;
+}
+
+export interface PlayerJoinedMessage {
+  playerName: string;
+  playerCount: number;
+}

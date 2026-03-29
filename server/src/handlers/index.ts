@@ -6,7 +6,11 @@ import type {
   CreateGameData,
   ErrorResponse,
   GameCreatedResponse,
+  GameJoinedResponse,
   IncomingMessage,
+  JoinGameData,
+  Player,
+  PlayerJoinedMessage,
   Question,
   RegData,
   RegResponse,
@@ -44,6 +48,35 @@ function sendErrorResponse(socket: WebSocket, message: string): void {
 
 function sendGameCreatedResponse(socket: WebSocket, data: GameCreatedResponse): void {
   sendMessage(socket, 'game_created', data, 0);
+}
+
+function sendGameJoinedResponse(socket: WebSocket, data: GameJoinedResponse): void {
+  sendMessage(socket, 'game_joined', data, 0);
+}
+
+function sendPlayerJoined(socket: WebSocket, data: PlayerJoinedMessage): void {
+  sendMessage(socket, 'player_joined', data, 0);
+}
+
+function sendUpdatePlayers(socket: WebSocket, players: Player[]): void {
+  sendMessage(socket, 'update_players', players, 0);
+}
+
+function getSocketsForGame(store: InMemoryStore, gameId: string, hostId: string, players: Player[]): WebSocket[] {
+  const sockets = new Set<WebSocket>();
+  const hostSession = store.getSessionByUserId(hostId);
+  if (hostSession) {
+    sockets.add(hostSession.socket);
+  }
+
+  for (const player of players) {
+    const session = store.getSessionByUserId(player.index);
+    if (session && session.gameId === gameId) {
+      sockets.add(session.socket);
+    }
+  }
+
+  return [...sockets];
 }
 
 function handleReg(store: InMemoryStore, payload: HandlerPayload): void {
@@ -226,6 +259,91 @@ function handleCreateGame(store: InMemoryStore, payload: HandlerPayload): void {
   });
 }
 
+function isJoinGameData(value: unknown): value is JoinGameData {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<JoinGameData>;
+  return typeof candidate.code === 'string';
+}
+
+function handleJoinGame(store: InMemoryStore, payload: HandlerPayload): void {
+  const { socket, message } = payload;
+  const session = store.getSessionBySocket(socket);
+
+  if (!session) {
+    sendErrorResponse(socket, 'Authentication required');
+    return;
+  }
+
+  if (!isJoinGameData(message.data)) {
+    sendErrorResponse(socket, 'Invalid join_game payload');
+    return;
+  }
+
+  const roomCode = message.data.code.trim().toUpperCase();
+  if (!roomCode) {
+    sendErrorResponse(socket, 'Room code is required');
+    return;
+  }
+
+  const game = store.getGameByCode(roomCode);
+  if (!game) {
+    sendErrorResponse(socket, 'Game not found');
+    return;
+  }
+
+  if (game.status !== 'waiting') {
+    sendErrorResponse(socket, 'Game already started or finished');
+    return;
+  }
+
+  const user = store.getUserById(session.userId);
+  if (!user) {
+    sendErrorResponse(socket, 'User not found');
+    return;
+  }
+
+  const existingPlayer = game.players.find((player) => player.index === user.index);
+  let didAddPlayer = false;
+
+  if (!existingPlayer) {
+    game.players.push({
+      name: user.name,
+      index: user.index,
+      score: 0,
+    });
+    didAddPlayer = true;
+  }
+
+  store.saveGame(game);
+  store.saveSession({ ...session, gameId: game.id });
+
+  sendGameJoinedResponse(socket, {
+    gameId: game.id,
+  });
+
+  if (didAddPlayer) {
+    const sockets = getSocketsForGame(store, game.id, game.hostId, game.players);
+    const joinedPayload: PlayerJoinedMessage = {
+      playerName: user.name,
+      playerCount: game.players.length,
+    };
+
+    for (const targetSocket of sockets) {
+      sendPlayerJoined(targetSocket, joinedPayload);
+      sendUpdatePlayers(targetSocket, game.players);
+    }
+    return;
+  }
+
+  const sockets = getSocketsForGame(store, game.id, game.hostId, game.players);
+  for (const targetSocket of sockets) {
+    sendUpdatePlayers(targetSocket, game.players);
+  }
+}
+
 export function createHandlers(context: HandlerContext): Record<string, CommandHandler> {
   return {
     reg: (payload) => {
@@ -233,6 +351,9 @@ export function createHandlers(context: HandlerContext): Record<string, CommandH
     },
     create_game: (payload) => {
       handleCreateGame(context.store, payload);
+    },
+    join_game: (payload) => {
+      handleJoinGame(context.store, payload);
     },
   };
 }

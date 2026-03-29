@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
 import { sendMessage } from '../protocol/index.js';
-import { createGame } from '../game-engine/index.js';
+import { beginGame, createGame, scheduleQuestionTimer, toQuestionMessage } from '../game-engine/index.js';
 import type { InMemoryStore } from '../store/index.js';
 import type {
   CreateGameData,
@@ -11,9 +11,11 @@ import type {
   JoinGameData,
   Player,
   PlayerJoinedMessage,
+  QuestionMessage,
   Question,
   RegData,
   RegResponse,
+  StartGameData,
   User,
 } from '../types.js';
 
@@ -62,6 +64,10 @@ function sendUpdatePlayers(socket: WebSocket, players: Player[]): void {
   sendMessage(socket, 'update_players', players, 0);
 }
 
+function sendQuestion(socket: WebSocket, data: QuestionMessage): void {
+  sendMessage(socket, 'question', data, 0);
+}
+
 function getSocketsForGame(store: InMemoryStore, gameId: string, hostId: string, players: Player[]): WebSocket[] {
   const sockets = new Set<WebSocket>();
   const hostSession = store.getSessionByUserId(hostId);
@@ -77,6 +83,13 @@ function getSocketsForGame(store: InMemoryStore, gameId: string, hostId: string,
   }
 
   return [...sockets];
+}
+
+function broadcastQuestion(store: InMemoryStore, gameId: string, hostId: string, players: Player[], question: QuestionMessage): void {
+  const sockets = getSocketsForGame(store, gameId, hostId, players);
+  for (const targetSocket of sockets) {
+    sendQuestion(targetSocket, question);
+  }
 }
 
 function handleReg(store: InMemoryStore, payload: HandlerPayload): void {
@@ -344,6 +357,79 @@ function handleJoinGame(store: InMemoryStore, payload: HandlerPayload): void {
   }
 }
 
+function isStartGameData(value: unknown): value is StartGameData {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<StartGameData>;
+  return typeof candidate.gameId === 'string';
+}
+
+function handleStartGame(store: InMemoryStore, payload: HandlerPayload): void {
+  const { socket, message } = payload;
+  const session = store.getSessionBySocket(socket);
+
+  if (!session) {
+    sendErrorResponse(socket, 'Authentication required');
+    return;
+  }
+
+  if (!isStartGameData(message.data)) {
+    sendErrorResponse(socket, 'Invalid start_game payload');
+    return;
+  }
+
+  const gameId = message.data.gameId.trim();
+  if (!gameId) {
+    sendErrorResponse(socket, 'gameId is required');
+    return;
+  }
+
+  const game = store.getGameById(gameId);
+  if (!game) {
+    sendErrorResponse(socket, 'Game not found');
+    return;
+  }
+
+  if (session.userId !== game.hostId) {
+    sendErrorResponse(socket, 'Only the host can start the game');
+    return;
+  }
+
+  if (game.status !== 'waiting') {
+    sendErrorResponse(socket, 'Game is already started or finished');
+    return;
+  }
+
+  if (game.players.length === 0) {
+    sendErrorResponse(socket, 'At least one player must join before start');
+    return;
+  }
+
+  const firstQuestion = beginGame(game);
+  if (!firstQuestion) {
+    sendErrorResponse(socket, 'Game has no questions');
+    return;
+  }
+
+  game.answersByQuestion.set(game.currentQuestion, []);
+  scheduleQuestionTimer(game, () => {
+    game.questionTimer = undefined;
+  });
+
+  store.saveGame(game);
+  store.saveSession({ ...session, gameId: game.id });
+
+  const questionPayload = toQuestionMessage(game);
+  if (!questionPayload) {
+    sendErrorResponse(socket, 'Failed to prepare question');
+    return;
+  }
+
+  broadcastQuestion(store, game.id, game.hostId, game.players, questionPayload);
+}
+
 export function createHandlers(context: HandlerContext): Record<string, CommandHandler> {
   return {
     reg: (payload) => {
@@ -354,6 +440,9 @@ export function createHandlers(context: HandlerContext): Record<string, CommandH
     },
     join_game: (payload) => {
       handleJoinGame(context.store, payload);
+    },
+    start_game: (payload) => {
+      handleStartGame(context.store, payload);
     },
   };
 }

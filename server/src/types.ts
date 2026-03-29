@@ -32,6 +32,8 @@ export interface Game {
   currentQuestion: number;
   status: GameStatus;
   answersByQuestion: Map<number, AnswerRecord[]>;
+  questionStartedAt?: number;
+  questionTimer?: NodeJS.Timeout;
 }
 
 export interface Session {
@@ -95,4 +97,16 @@ export interface GameJoinedResponse {
 export interface PlayerJoinedMessage {
   playerName: string;
   playerCount: number;
+}
+
+export interface StartGameData {
+  gameId: string;
+}
+
+export interface QuestionMessage {
+  questionNumber: number;
+  totalQuestions: number;
+  text: string;
+  options: [string, string, string, string];
+  timeLimitSec: number;
 }

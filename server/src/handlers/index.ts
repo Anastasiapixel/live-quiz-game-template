@@ -1,7 +1,17 @@
 import type { WebSocket } from 'ws';
 import { sendMessage } from '../protocol/index.js';
+import { createGame } from '../game-engine/index.js';
 import type { InMemoryStore } from '../store/index.js';
-import type { IncomingMessage, RegData, RegResponse, User } from '../types.js';
+import type {
+  CreateGameData,
+  ErrorResponse,
+  GameCreatedResponse,
+  IncomingMessage,
+  Question,
+  RegData,
+  RegResponse,
+  User,
+} from '../types.js';
 
 export interface HandlerContext {
   store: InMemoryStore;
@@ -25,6 +35,15 @@ function isRegData(value: unknown): value is RegData {
 
 function sendRegResponse(socket: WebSocket, data: RegResponse): void {
   sendMessage(socket, 'reg', data, 0);
+}
+
+function sendErrorResponse(socket: WebSocket, message: string): void {
+  const payload: ErrorResponse = { message };
+  sendMessage(socket, 'error', payload, 0);
+}
+
+function sendGameCreatedResponse(socket: WebSocket, data: GameCreatedResponse): void {
+  sendMessage(socket, 'game_created', data, 0);
 }
 
 function handleReg(store: InMemoryStore, payload: HandlerPayload): void {
@@ -93,10 +112,127 @@ function handleReg(store: InMemoryStore, payload: HandlerPayload): void {
   });
 }
 
+function isQuestion(value: unknown): value is Question {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<Question> & { options?: unknown };
+
+  if (typeof candidate.text !== 'string') {
+    return false;
+  }
+
+  if (!Array.isArray(candidate.options) || candidate.options.length !== 4) {
+    return false;
+  }
+
+  if (!candidate.options.every((option) => typeof option === 'string')) {
+    return false;
+  }
+
+  const correctIndex = candidate.correctIndex;
+  if (
+    typeof correctIndex !== 'number' ||
+    !Number.isInteger(correctIndex) ||
+    correctIndex < 0 ||
+    correctIndex > 3
+  ) {
+    return false;
+  }
+
+  if (
+    typeof candidate.timeLimitSec !== 'number' ||
+    !Number.isFinite(candidate.timeLimitSec) ||
+    candidate.timeLimitSec <= 0
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function isCreateGameData(value: unknown): value is CreateGameData {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<CreateGameData>;
+  if (!Array.isArray(candidate.questions)) {
+    return false;
+  }
+
+  return candidate.questions.every((question) => isQuestion(question));
+}
+
+function handleCreateGame(store: InMemoryStore, payload: HandlerPayload): void {
+  const { socket, message } = payload;
+  const session = store.getSessionBySocket(socket);
+
+  if (!session) {
+    sendErrorResponse(socket, 'Authentication required');
+    return;
+  }
+
+  if (!isCreateGameData(message.data)) {
+    sendErrorResponse(socket, 'Invalid create_game payload');
+    return;
+  }
+
+  if (message.data.questions.length === 0) {
+    sendErrorResponse(socket, 'At least one question is required');
+    return;
+  }
+
+  const questions: Question[] = message.data.questions.map((question) => ({
+    text: question.text.trim(),
+    options: question.options.map((option) => option.trim()) as [string, string, string, string],
+    correctIndex: question.correctIndex,
+    timeLimitSec: question.timeLimitSec,
+  }));
+
+  const hasInvalidQuestionContent = questions.some((question) => {
+    if (!question.text) {
+      return true;
+    }
+
+    if (question.options.some((option) => !option)) {
+      return true;
+    }
+
+    return false;
+  });
+
+  if (hasInvalidQuestionContent) {
+    sendErrorResponse(socket, 'Question text and options must be non-empty');
+    return;
+  }
+
+  const gameId = store.generateGameId();
+  const roomCode = store.generateRoomCode();
+  const game = createGame({
+    id: gameId,
+    code: roomCode,
+    hostId: session.userId,
+    questions,
+  });
+
+  store.saveGame(game);
+  store.saveSession({ ...session, gameId: game.id });
+
+  sendGameCreatedResponse(socket, {
+    gameId: game.id,
+    code: game.code,
+  });
+}
+
 export function createHandlers(context: HandlerContext): Record<string, CommandHandler> {
   return {
     reg: (payload) => {
       handleReg(context.store, payload);
+    },
+    create_game: (payload) => {
+      handleCreateGame(context.store, payload);
     },
   };
 }

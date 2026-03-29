@@ -70,3 +70,16 @@ export interface RegResponse {
   error: boolean;
   errorText: string;
 }
+
+export interface CreateGameData {
+  questions: Question[];
+}
+
+export interface GameCreatedResponse {
+  gameId: string;
+  code: string;
+}
+
+export interface ErrorResponse {
+  message: string;
+}

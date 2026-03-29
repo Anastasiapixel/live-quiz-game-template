@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
-import { createHandlers } from './handlers/index.js';
+import { createHandlers, handleSocketDisconnect } from './handlers/index.js';
 import { parseIncomingMessage } from './protocol/index.js';
 import { createStore } from './store/index.js';
 
@@ -28,7 +28,7 @@ wss.on('connection', (socket: WebSocket) => {
   });
 
   socket.on('close', () => {
-    store.removeSessionBySocket(socket);
+    handleSocketDisconnect(store, socket);
   });
 });
 

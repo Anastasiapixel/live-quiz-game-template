@@ -146,6 +146,54 @@ function broadcastGameFinished(
   }
 }
 
+function clearGameBindingForUser(store: InMemoryStore, userId: string, gameId: string): void {
+  const session = store.getSessionByUserId(userId);
+  if (!session || session.gameId !== gameId) {
+    return;
+  }
+
+  store.saveSession({
+    ...session,
+    gameId: undefined,
+  });
+}
+
+function clearGameBindings(store: InMemoryStore, gameId: string, hostId: string, players: Player[]): void {
+  clearGameBindingForUser(store, hostId, gameId);
+  for (const player of players) {
+    clearGameBindingForUser(store, player.index, gameId);
+  }
+}
+
+function removeGameIfNoActiveParticipants(store: InMemoryStore, gameId: string): void {
+  const game = store.getGameById(gameId);
+  if (!game) {
+    return;
+  }
+
+  const hostSession = store.getSessionByUserId(game.hostId);
+  if (hostSession && hostSession.gameId === gameId) {
+    return;
+  }
+
+  for (const player of game.players) {
+    const playerSession = store.getSessionByUserId(player.index);
+    if (playerSession && playerSession.gameId === gameId) {
+      return;
+    }
+  }
+
+  if (game.questionTimer) {
+    clearTimeout(game.questionTimer);
+  }
+
+  if (game.postQuestionTimer) {
+    clearTimeout(game.postQuestionTimer);
+  }
+
+  store.removeGame(gameId);
+}
+
 function completeGame(store: InMemoryStore, gameId: string): void {
   const game = store.getGameById(gameId);
   if (!game) {
@@ -168,6 +216,8 @@ function completeGame(store: InMemoryStore, gameId: string): void {
   const payload = toGameFinishedMessage(game);
   store.saveGame(game);
   broadcastGameFinished(store, game.id, game.hostId, game.players, payload);
+  clearGameBindings(store, game.id, game.hostId, game.players);
+  removeGameIfNoActiveParticipants(store, game.id);
 }
 
 function schedulePostQuestionStep(store: InMemoryStore, gameId: string): void {
@@ -681,6 +731,65 @@ function handleAnswer(store: InMemoryStore, payload: HandlerPayload): void {
   if (allPlayersAnswered) {
     finalizeCurrentQuestion(store, game.id);
   }
+}
+
+export function handleSocketDisconnect(store: InMemoryStore, socket: WebSocket): void {
+  const session = store.getSessionBySocket(socket);
+  if (!session) {
+    return;
+  }
+
+  store.removeSessionBySocket(socket);
+
+  if (!session.gameId) {
+    return;
+  }
+
+  const game = store.getGameById(session.gameId);
+  if (!game) {
+    return;
+  }
+
+  if (session.userId === game.hostId) {
+    completeGame(store, game.id);
+    return;
+  }
+
+  const playerBeforeRemoval = game.players.some((player) => player.index === session.userId);
+  if (!playerBeforeRemoval) {
+    removeGameIfNoActiveParticipants(store, game.id);
+    return;
+  }
+
+  game.players = game.players.filter((player) => player.index !== session.userId);
+
+  if (game.currentQuestion >= 0) {
+    const answers = game.answersByQuestion.get(game.currentQuestion) ?? [];
+    const filteredAnswers = answers.filter((answer) => answer.playerId !== session.userId);
+    game.answersByQuestion.set(game.currentQuestion, filteredAnswers);
+  }
+
+  store.saveGame(game);
+
+  if (game.status === 'in_progress' && game.players.length === 0) {
+    completeGame(store, game.id);
+    return;
+  }
+
+  const sockets = getSocketsForGame(store, game.id, game.hostId, game.players);
+  for (const targetSocket of sockets) {
+    sendUpdatePlayers(targetSocket, game.players);
+  }
+
+  if (game.status === 'in_progress') {
+    const currentAnswers = game.answersByQuestion.get(game.currentQuestion) ?? [];
+    if (currentAnswers.length >= game.players.length && game.players.length > 0) {
+      finalizeCurrentQuestion(store, game.id);
+      return;
+    }
+  }
+
+  removeGameIfNoActiveParticipants(store, game.id);
 }
 
 export function createHandlers(context: HandlerContext): Record<string, CommandHandler> {

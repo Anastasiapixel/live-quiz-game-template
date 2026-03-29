@@ -1,67 +1,60 @@
 import type { WebSocket } from 'ws';
 
+export type Identifier = string;
+export type GameStatus = 'waiting' | 'in_progress' | 'finished';
+
 export interface Player {
   name: string;
-  index: string;
+  index: Identifier;
   score: number;
-  ws?: WebSocket;
-  hasAnswered?: boolean;
-  answerTime?: number;
-  answeredCorrectly?: boolean;
 }
 
 export interface Question {
   text: string;
-  options: string[];
+  options: [string, string, string, string];
   correctIndex: number;
   timeLimitSec: number;
+}
+
+export interface AnswerRecord {
+  playerId: Identifier;
+  questionIndex: number;
+  answerIndex: number;
+  answeredAt: number;
 }
 
 export interface Game {
   id: string;
   code: string;
-  hostId: string;
+  hostId: Identifier;
   questions: Question[];
   players: Player[];
   currentQuestion: number;
-  status: 'waiting' | 'in_progress' | 'finished';
-  questionStartTime?: number;
-  questionTimer?: NodeJS.Timeout;
-  playerAnswers: Map<string, { answerIndex: number; timestamp: number }>;
+  status: GameStatus;
+  answersByQuestion: Map<number, AnswerRecord[]>;
+}
+
+export interface Session {
+  userId: Identifier;
+  socket: WebSocket;
+  connectedAt: number;
+  gameId?: string;
 }
 
 export interface User {
   name: string;
   password: string;
-  index: string;
-  ws?: WebSocket;
+  index: Identifier;
 }
 
-export interface WSMessage {
+export interface IncomingMessage<TData = unknown> {
   type: string;
-  data: any;
+  data: TData;
   id: number;
 }
 
-export interface RegData {
-  name: string;
-  password: string;
-}
-
-export interface CreateGameData {
-  questions: Question[];
-}
-
-export interface JoinGameData {
-  code: string;
-}
-
-export interface StartGameData {
-  gameId: string;
-}
-
-export interface AnswerData {
-  gameId: string;
-  questionIndex: number;
-  answerIndex: number;
+export interface OutgoingMessage<TData = unknown> {
+  type: string;
+  data: TData;
+  id: number;
 }

@@ -110,3 +110,13 @@ export interface QuestionMessage {
   options: [string, string, string, string];
   timeLimitSec: number;
 }
+
+export interface AnswerData {
+  gameId: string;
+  questionIndex: number;
+  answerIndex: number;
+}
+
+export interface AnswerAcceptedMessage {
+  questionIndex: number;
+}

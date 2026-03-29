@@ -1,8 +1,17 @@
 import type { WebSocket } from 'ws';
 import { sendMessage } from '../protocol/index.js';
-import { beginGame, createGame, scheduleQuestionTimer, toQuestionMessage } from '../game-engine/index.js';
+import {
+  beginGame,
+  createGame,
+  getCurrentQuestion,
+  isAnswerWindowOpen,
+  scheduleQuestionTimer,
+  toQuestionMessage,
+} from '../game-engine/index.js';
 import type { InMemoryStore } from '../store/index.js';
 import type {
+  AnswerAcceptedMessage,
+  AnswerData,
   CreateGameData,
   ErrorResponse,
   GameCreatedResponse,
@@ -66,6 +75,10 @@ function sendUpdatePlayers(socket: WebSocket, players: Player[]): void {
 
 function sendQuestion(socket: WebSocket, data: QuestionMessage): void {
   sendMessage(socket, 'question', data, 0);
+}
+
+function sendAnswerAccepted(socket: WebSocket, data: AnswerAcceptedMessage): void {
+  sendMessage(socket, 'answer_accepted', data, 0);
 }
 
 function getSocketsForGame(store: InMemoryStore, gameId: string, hostId: string, players: Player[]): WebSocket[] {
@@ -430,6 +443,101 @@ function handleStartGame(store: InMemoryStore, payload: HandlerPayload): void {
   broadcastQuestion(store, game.id, game.hostId, game.players, questionPayload);
 }
 
+function isAnswerData(value: unknown): value is AnswerData {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<AnswerData>;
+  return (
+    typeof candidate.gameId === 'string' &&
+    typeof candidate.questionIndex === 'number' &&
+    Number.isInteger(candidate.questionIndex) &&
+    typeof candidate.answerIndex === 'number' &&
+    Number.isInteger(candidate.answerIndex)
+  );
+}
+
+function handleAnswer(store: InMemoryStore, payload: HandlerPayload): void {
+  const { socket, message } = payload;
+  const session = store.getSessionBySocket(socket);
+
+  if (!session) {
+    sendErrorResponse(socket, 'Authentication required');
+    return;
+  }
+
+  if (!isAnswerData(message.data)) {
+    sendErrorResponse(socket, 'Invalid answer payload');
+    return;
+  }
+
+  const gameId = message.data.gameId.trim();
+  if (!gameId) {
+    sendErrorResponse(socket, 'gameId is required');
+    return;
+  }
+
+  if (message.data.answerIndex < 0 || message.data.answerIndex > 3) {
+    sendErrorResponse(socket, 'answerIndex must be between 0 and 3');
+    return;
+  }
+
+  const game = store.getGameById(gameId);
+  if (!game) {
+    sendErrorResponse(socket, 'Game not found');
+    return;
+  }
+
+  if (game.status !== 'in_progress') {
+    sendErrorResponse(socket, 'Game is not in progress');
+    return;
+  }
+
+  const player = game.players.find((candidatePlayer) => candidatePlayer.index === session.userId);
+  if (!player) {
+    sendErrorResponse(socket, 'Only joined players can answer');
+    return;
+  }
+
+  if (message.data.questionIndex !== game.currentQuestion) {
+    sendErrorResponse(socket, 'Question index mismatch');
+    return;
+  }
+
+  const currentQuestion = getCurrentQuestion(game);
+  if (!currentQuestion) {
+    sendErrorResponse(socket, 'Current question is unavailable');
+    return;
+  }
+
+  if (!isAnswerWindowOpen(game)) {
+    sendErrorResponse(socket, 'Answer window closed');
+    return;
+  }
+
+  const answersForCurrentQuestion = game.answersByQuestion.get(game.currentQuestion) ?? [];
+  const hasAnswered = answersForCurrentQuestion.some((record) => record.playerId === player.index);
+  if (hasAnswered) {
+    sendErrorResponse(socket, 'Answer already submitted');
+    return;
+  }
+
+  answersForCurrentQuestion.push({
+    playerId: player.index,
+    questionIndex: game.currentQuestion,
+    answerIndex: message.data.answerIndex,
+    answeredAt: Date.now(),
+  });
+
+  game.answersByQuestion.set(game.currentQuestion, answersForCurrentQuestion);
+  store.saveGame(game);
+
+  sendAnswerAccepted(socket, {
+    questionIndex: game.currentQuestion,
+  });
+}
+
 export function createHandlers(context: HandlerContext): Record<string, CommandHandler> {
   return {
     reg: (payload) => {
@@ -443,6 +551,9 @@ export function createHandlers(context: HandlerContext): Record<string, CommandH
     },
     start_game: (payload) => {
       handleStartGame(context.store, payload);
+    },
+    answer: (payload) => {
+      handleAnswer(context.store, payload);
     },
   };
 }

@@ -68,3 +68,21 @@ export function scheduleQuestionTimer(game: Game, onTimeout: () => void): void {
   game.questionStartedAt = Date.now();
   game.questionTimer = setTimeout(onTimeout, question.timeLimitSec * 1000);
 }
+
+export function getQuestionDeadlineAt(game: Game): number | null {
+  const question = getCurrentQuestion(game);
+  if (!question || typeof game.questionStartedAt !== 'number') {
+    return null;
+  }
+
+  return game.questionStartedAt + question.timeLimitSec * 1000;
+}
+
+export function isAnswerWindowOpen(game: Game, now = Date.now()): boolean {
+  const deadline = getQuestionDeadlineAt(game);
+  if (deadline === null) {
+    return false;
+  }
+
+  return now <= deadline;
+}

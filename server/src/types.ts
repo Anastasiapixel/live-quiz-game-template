@@ -1,45 +1,64 @@
 import type { WebSocket } from 'ws';
 
+export type Identifier = string;
+export type GameStatus = 'waiting' | 'in_progress' | 'finished';
+
 export interface Player {
   name: string;
-  index: string;
+  index: Identifier;
   score: number;
-  ws?: WebSocket;
-  hasAnswered?: boolean;
-  answerTime?: number;
-  answeredCorrectly?: boolean;
 }
 
 export interface Question {
   text: string;
-  options: string[];
+  options: [string, string, string, string];
   correctIndex: number;
   timeLimitSec: number;
+}
+
+export interface AnswerRecord {
+  playerId: Identifier;
+  questionIndex: number;
+  answerIndex: number;
+  answeredAt: number;
 }
 
 export interface Game {
   id: string;
   code: string;
-  hostId: string;
+  hostId: Identifier;
   questions: Question[];
   players: Player[];
   currentQuestion: number;
-  status: 'waiting' | 'in_progress' | 'finished';
-  questionStartTime?: number;
+  status: GameStatus;
+  answersByQuestion: Map<number, AnswerRecord[]>;
+  questionStartedAt?: number;
   questionTimer?: NodeJS.Timeout;
-  playerAnswers: Map<string, { answerIndex: number; timestamp: number }>;
+  postQuestionTimer?: NodeJS.Timeout;
+}
+
+export interface Session {
+  userId: Identifier;
+  socket: WebSocket;
+  connectedAt: number;
+  gameId?: string;
 }
 
 export interface User {
   name: string;
   password: string;
-  index: string;
-  ws?: WebSocket;
+  index: Identifier;
 }
 
-export interface WSMessage {
+export interface IncomingMessage<TData = unknown> {
   type: string;
-  data: any;
+  data: TData;
+  id: number;
+}
+
+export interface OutgoingMessage<TData = unknown> {
+  type: string;
+  data: TData;
   id: number;
 }
 
@@ -48,20 +67,81 @@ export interface RegData {
   password: string;
 }
 
+export interface RegResponse {
+  name: string;
+  index: Identifier | '';
+  error: boolean;
+  errorText: string;
+}
+
 export interface CreateGameData {
   questions: Question[];
+}
+
+export interface GameCreatedResponse {
+  gameId: string;
+  code: string;
+}
+
+export interface ErrorResponse {
+  message: string;
 }
 
 export interface JoinGameData {
   code: string;
 }
 
+export interface GameJoinedResponse {
+  gameId: string;
+}
+
+export interface PlayerJoinedMessage {
+  playerName: string;
+  playerCount: number;
+}
+
 export interface StartGameData {
   gameId: string;
+}
+
+export interface QuestionMessage {
+  questionNumber: number;
+  totalQuestions: number;
+  text: string;
+  options: [string, string, string, string];
+  timeLimitSec: number;
 }
 
 export interface AnswerData {
   gameId: string;
   questionIndex: number;
   answerIndex: number;
+}
+
+export interface AnswerAcceptedMessage {
+  questionIndex: number;
+}
+
+export interface PlayerQuestionResult {
+  name: string;
+  answered: boolean;
+  correct: boolean;
+  pointsEarned: number;
+  totalScore: number;
+}
+
+export interface QuestionResultMessage {
+  questionIndex: number;
+  correctIndex: number;
+  playerResults: PlayerQuestionResult[];
+}
+
+export interface ScoreboardEntry {
+  name: string;
+  score: number;
+  rank: number;
+}
+
+export interface GameFinishedMessage {
+  scoreboard: ScoreboardEntry[];
 }

@@ -46,6 +46,24 @@ export interface HandlerPayload {
 export type CommandHandler = (payload: HandlerPayload) => void;
 const RESULT_DISPLAY_MS = 3000;
 
+function logInfo(event: string, details?: Record<string, unknown>): void {
+  if (details) {
+    console.info(`[game] ${event}`, details);
+    return;
+  }
+
+  console.info(`[game] ${event}`);
+}
+
+function logWarn(event: string, details?: Record<string, unknown>): void {
+  if (details) {
+    console.warn(`[game] ${event}`, details);
+    return;
+  }
+
+  console.warn(`[game] ${event}`);
+}
+
 function isRegData(value: unknown): value is RegData {
   if (!value || typeof value !== 'object') {
     return false;
@@ -62,6 +80,7 @@ function sendRegResponse(socket: WebSocket, data: RegResponse): void {
 function sendErrorResponse(socket: WebSocket, message: string): void {
   const payload: ErrorResponse = { message };
   sendMessage(socket, 'error', payload, 0);
+  logWarn('error_response', { message });
 }
 
 function sendGameCreatedResponse(socket: WebSocket, data: GameCreatedResponse): void {
@@ -194,7 +213,7 @@ function removeGameIfNoActiveParticipants(store: InMemoryStore, gameId: string):
   store.removeGame(gameId);
 }
 
-function completeGame(store: InMemoryStore, gameId: string): void {
+function completeGame(store: InMemoryStore, gameId: string, reason = 'completed'): void {
   const game = store.getGameById(gameId);
   if (!game) {
     return;
@@ -216,6 +235,12 @@ function completeGame(store: InMemoryStore, gameId: string): void {
   const payload = toGameFinishedMessage(game);
   store.saveGame(game);
   broadcastGameFinished(store, game.id, game.hostId, game.players, payload);
+  logInfo('game_finished', {
+    gameId: game.id,
+    reason,
+    players: game.players.length,
+    scoreboard: payload.scoreboard,
+  });
   clearGameBindings(store, game.id, game.hostId, game.players);
   removeGameIfNoActiveParticipants(store, game.id);
 }
@@ -239,13 +264,13 @@ function schedulePostQuestionStep(store: InMemoryStore, gameId: string): void {
     nextGame.postQuestionTimer = undefined;
 
     if (!hasNextQuestion(nextGame)) {
-      completeGame(store, gameId);
+      completeGame(store, gameId, 'last_question_completed');
       return;
     }
 
     const nextQuestion = advanceToNextQuestion(nextGame);
     if (!nextQuestion) {
-      completeGame(store, gameId);
+      completeGame(store, gameId, 'next_question_missing');
       return;
     }
 
@@ -258,7 +283,7 @@ function schedulePostQuestionStep(store: InMemoryStore, gameId: string): void {
 
     const nextPayload = toQuestionMessage(nextGame);
     if (!nextPayload) {
-      completeGame(store, gameId);
+      completeGame(store, gameId, 'next_question_payload_failed');
       return;
     }
 
@@ -359,6 +384,7 @@ function handleReg(store: InMemoryStore, payload: HandlerPayload): void {
     error: false,
     errorText: '',
   });
+  logInfo('user_authenticated', { userId: targetUser.index, name: targetUser.name });
 }
 
 function isQuestion(value: unknown): value is Question {
@@ -473,6 +499,12 @@ function handleCreateGame(store: InMemoryStore, payload: HandlerPayload): void {
     gameId: game.id,
     code: game.code,
   });
+  logInfo('game_created', {
+    gameId: game.id,
+    hostId: game.hostId,
+    code: game.code,
+    questions: game.questions.length,
+  });
 }
 
 function isJoinGameData(value: unknown): value is JoinGameData {
@@ -538,6 +570,12 @@ function handleJoinGame(store: InMemoryStore, payload: HandlerPayload): void {
 
   sendGameJoinedResponse(socket, {
     gameId: game.id,
+  });
+  logInfo('game_joined', {
+    gameId: game.id,
+    userId: session.userId,
+    playerCount: game.players.length,
+    added: didAddPlayer,
   });
 
   if (didAddPlayer) {
@@ -631,6 +669,12 @@ function handleStartGame(store: InMemoryStore, payload: HandlerPayload): void {
   }
 
   broadcastQuestion(store, game.id, game.hostId, game.players, questionPayload);
+  logInfo('game_started', {
+    gameId: game.id,
+    hostId: game.hostId,
+    players: game.players.length,
+    questionIndex: game.currentQuestion,
+  });
 }
 
 function isAnswerData(value: unknown): value is AnswerData {
@@ -751,7 +795,7 @@ export function handleSocketDisconnect(store: InMemoryStore, socket: WebSocket):
   }
 
   if (session.userId === game.hostId) {
-    completeGame(store, game.id);
+    completeGame(store, game.id, 'host_disconnected');
     return;
   }
 
@@ -772,7 +816,7 @@ export function handleSocketDisconnect(store: InMemoryStore, socket: WebSocket):
   store.saveGame(game);
 
   if (game.status === 'in_progress' && game.players.length === 0) {
-    completeGame(store, game.id);
+    completeGame(store, game.id, 'all_players_disconnected');
     return;
   }
 

@@ -19,25 +19,49 @@ function rawDataToString(raw: RawData): string {
 }
 
 export function parseIncomingMessage(raw: RawData): IncomingMessage | null {
+  const parsed = parseIncomingMessageDetailed(raw);
+  return parsed.ok ? parsed.message : null;
+}
+
+export type IncomingParseResult =
+  | { ok: true; message: IncomingMessage }
+  | { ok: false; error: string };
+
+export function parseIncomingMessageDetailed(raw: RawData): IncomingParseResult {
+  let decodedRaw: unknown;
+
   try {
-    const parsed = JSON.parse(rawDataToString(raw)) as Partial<IncomingMessage>;
+    decodedRaw = JSON.parse(rawDataToString(raw));
+  } catch {
+    return { ok: false, error: 'Invalid JSON payload' };
+  }
 
-    if (typeof parsed.type !== 'string') {
-      return null;
-    }
+  if (!decodedRaw || typeof decodedRaw !== 'object') {
+    return { ok: false, error: 'Message must be a JSON object' };
+  }
 
-    if (typeof parsed.id !== 'number') {
-      return null;
-    }
+  const parsed = decodedRaw as Partial<IncomingMessage>;
 
-    return {
+  if (typeof parsed.type !== 'string' || !parsed.type.trim()) {
+    return { ok: false, error: 'Message type must be a non-empty string' };
+  }
+
+  if (typeof parsed.id !== 'number' || !Number.isInteger(parsed.id)) {
+    return { ok: false, error: 'Message id must be an integer' };
+  }
+
+  if (parsed.id !== 0) {
+    return { ok: false, error: 'Message id must be 0' };
+  }
+
+  return {
+    ok: true,
+    message: {
       type: parsed.type,
       data: parsed.data ?? null,
       id: parsed.id,
-    };
-  } catch {
-    return null;
-  }
+    },
+  };
 }
 
 export function createMessage<TData>(

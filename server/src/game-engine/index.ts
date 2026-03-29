@@ -1,4 +1,12 @@
-import type { Game, Question, QuestionMessage } from '../types.js';
+import type {
+  Game,
+  PlayerQuestionResult,
+  Question,
+  QuestionMessage,
+  QuestionResultMessage,
+} from '../types.js';
+
+const BASE_POINTS = 1000;
 
 export interface CreateGameInput {
   id: string;
@@ -85,4 +93,52 @@ export function isAnswerWindowOpen(game: Game, now = Date.now()): boolean {
   }
 
   return now <= deadline;
+}
+
+export function resolveCurrentQuestion(game: Game): QuestionResultMessage | null {
+  const question = getCurrentQuestion(game);
+  if (!question || game.currentQuestion < 0) {
+    return null;
+  }
+
+  const questionIndex = game.currentQuestion;
+  const startedAt = game.questionStartedAt;
+  const questionDurationMs = question.timeLimitSec * 1000;
+  const answers = game.answersByQuestion.get(questionIndex) ?? [];
+  const answersByPlayerId = new Map<string, (typeof answers)[number]>();
+
+  for (const answer of answers) {
+    if (!answersByPlayerId.has(answer.playerId)) {
+      answersByPlayerId.set(answer.playerId, answer);
+    }
+  }
+
+  const playerResults: PlayerQuestionResult[] = game.players.map((player) => {
+    const answer = answersByPlayerId.get(player.index);
+    const answered = Boolean(answer);
+    const correct = Boolean(answer && answer.answerIndex === question.correctIndex);
+
+    let pointsEarned = 0;
+    if (correct && typeof startedAt === 'number') {
+      const elapsedMs = Math.max(0, answer!.answeredAt - startedAt);
+      const timeRemainingRatio = Math.max(0, (questionDurationMs - elapsedMs) / questionDurationMs);
+      pointsEarned = Math.floor(BASE_POINTS * timeRemainingRatio);
+    }
+
+    player.score += pointsEarned;
+
+    return {
+      name: player.name,
+      answered,
+      correct,
+      pointsEarned,
+      totalScore: player.score,
+    };
+  });
+
+  return {
+    questionIndex,
+    correctIndex: question.correctIndex,
+    playerResults,
+  };
 }

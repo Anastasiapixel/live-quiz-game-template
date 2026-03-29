@@ -120,3 +120,17 @@ export interface AnswerData {
 export interface AnswerAcceptedMessage {
   questionIndex: number;
 }
+
+export interface PlayerQuestionResult {
+  name: string;
+  answered: boolean;
+  correct: boolean;
+  pointsEarned: number;
+  totalScore: number;
+}
+
+export interface QuestionResultMessage {
+  questionIndex: number;
+  correctIndex: number;
+  playerResults: PlayerQuestionResult[];
+}

@@ -5,6 +5,7 @@ import {
   createGame,
   getCurrentQuestion,
   isAnswerWindowOpen,
+  resolveCurrentQuestion,
   scheduleQuestionTimer,
   toQuestionMessage,
 } from '../game-engine/index.js';
@@ -21,6 +22,7 @@ import type {
   Player,
   PlayerJoinedMessage,
   QuestionMessage,
+  QuestionResultMessage,
   Question,
   RegData,
   RegResponse,
@@ -77,6 +79,10 @@ function sendQuestion(socket: WebSocket, data: QuestionMessage): void {
   sendMessage(socket, 'question', data, 0);
 }
 
+function sendQuestionResult(socket: WebSocket, data: QuestionResultMessage): void {
+  sendMessage(socket, 'question_result', data, 0);
+}
+
 function sendAnswerAccepted(socket: WebSocket, data: AnswerAcceptedMessage): void {
   sendMessage(socket, 'answer_accepted', data, 0);
 }
@@ -103,6 +109,45 @@ function broadcastQuestion(store: InMemoryStore, gameId: string, hostId: string,
   for (const targetSocket of sockets) {
     sendQuestion(targetSocket, question);
   }
+}
+
+function broadcastQuestionResult(
+  store: InMemoryStore,
+  gameId: string,
+  hostId: string,
+  players: Player[],
+  questionResult: QuestionResultMessage,
+): void {
+  const sockets = getSocketsForGame(store, gameId, hostId, players);
+  for (const targetSocket of sockets) {
+    sendQuestionResult(targetSocket, questionResult);
+  }
+}
+
+function finalizeCurrentQuestion(store: InMemoryStore, gameId: string): void {
+  const game = store.getGameById(gameId);
+  if (!game || game.status !== 'in_progress') {
+    return;
+  }
+
+  if (typeof game.questionStartedAt !== 'number') {
+    return;
+  }
+
+  const resultPayload = resolveCurrentQuestion(game);
+  if (!resultPayload) {
+    return;
+  }
+
+  if (game.questionTimer) {
+    clearTimeout(game.questionTimer);
+  }
+
+  game.questionTimer = undefined;
+  game.questionStartedAt = undefined;
+
+  store.saveGame(game);
+  broadcastQuestionResult(store, game.id, game.hostId, game.players, resultPayload);
 }
 
 function handleReg(store: InMemoryStore, payload: HandlerPayload): void {
@@ -428,7 +473,7 @@ function handleStartGame(store: InMemoryStore, payload: HandlerPayload): void {
 
   game.answersByQuestion.set(game.currentQuestion, []);
   scheduleQuestionTimer(game, () => {
-    game.questionTimer = undefined;
+    finalizeCurrentQuestion(store, game.id);
   });
 
   store.saveGame(game);
@@ -536,6 +581,11 @@ function handleAnswer(store: InMemoryStore, payload: HandlerPayload): void {
   sendAnswerAccepted(socket, {
     questionIndex: game.currentQuestion,
   });
+
+  const allPlayersAnswered = answersForCurrentQuestion.length >= game.players.length;
+  if (allPlayersAnswered) {
+    finalizeCurrentQuestion(store, game.id);
+  }
 }
 
 export function createHandlers(context: HandlerContext): Record<string, CommandHandler> {
